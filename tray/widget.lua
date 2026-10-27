@@ -2,6 +2,10 @@
 --
 -- on_click/on_hover/tooltip/menu_items получают x,y ЛОКАЛЬНЫЕ для виджета.
 -- index_at не вычитает area.
+--
+-- Длина вдоль панели НЕ задаётся в config.lua: виджет сам сообщает её
+-- через `size:set_length(len)` в `on_socket_ready` (#items * шаг).
+-- `margin` — отступ поперёк; панель даёт thickness - 2*margin.
 
 local M = {}
 
@@ -57,6 +61,8 @@ M.on_socket_ready = function(state)
                 state.items = new_items
                 state.icons = {}
                 state.hovered_index = nil
+                apply_length(state, new_items)
+            else
                 apply_length(state, new_items)
             end
         end

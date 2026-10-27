@@ -6,9 +6,6 @@
 -- Pinned: в pinned.json храним key|label|cmd|icon_path, чтобы закрытый
 -- pinned рисовал иконку. При оживлении pinned (group ~= nil) icon_path
 -- обновляется в pinned.json.
---
--- ВРЕМЕННАЯ ОТЛАДКА: [dbg] в ensure_icon / on_socket_ready / render.
--- Убрать после диагностики.
 
 local M = {}
 
@@ -23,17 +20,14 @@ local PIN_FILE = os.getenv("HOME") .. "/.config/nspanel/widgets/window_list_rust
 local function load_pinned()
     local f = io.open(PIN_FILE, "r")
     if not f then
-        print("[dbg][wl] load_pinned: no file " .. PIN_FILE)
         return {}
     end
     local content = f:read("*a")
     f:close()
     local ok, data = pcall(json.decode, content)
     if ok and type(data) == "table" then
-        print("[dbg][wl] load_pinned: " .. #data .. " entries")
         return data
     end
-    print("[dbg][wl] load_pinned: decode failed")
     return {}
 end
 
@@ -72,12 +66,6 @@ local function ensure_icon(state, item)
     end
 
     local icon_path = item_icon_path(item)
-    print(string.format(
-        "[dbg][wl] ensure_icon key='%s' group=%s icon_path='%s'",
-        tostring(item.key),
-        item.group and "live" or "nil",
-        tostring(icon_path)
-    ))
     if not icon_path then
         state.icons[item.key] = false
         return false
@@ -85,18 +73,10 @@ local function ensure_icon(state, item)
 
     local pixels = img:load(icon_path, ICON_SIZE, "bilinear")
     if pixels then
-        print(string.format(
-            "[dbg][wl]   img:load OK key='%s' path='%s' n=%d",
-            tostring(item.key), icon_path, #pixels
-        ))
         state.icons[item.key] = pixels
         return pixels
     end
 
-    print(string.format(
-        "[dbg][wl]   img:load NIL key='%s' path='%s'",
-        tostring(item.key), icon_path
-    ))
     state.icons[item.key] = false
     return false
 end
@@ -214,10 +194,6 @@ local function refresh_pinned_icons(state)
                     end
                 end
                 if new_icon and new_icon ~= p.icon_path then
-                    print(string.format(
-                        "[dbg][wl] refresh_pinned_icons: key='%s' icon '%s' -> '%s'",
-                        tostring(p.key), tostring(p.icon_path), tostring(new_icon)
-                    ))
                     p.icon_path = new_icon
                     changed = true
                 end
@@ -244,18 +220,6 @@ M.on_socket_ready = function(state)
         local ok, data = pcall(json.decode, frame)
         if ok and data and data.type == "groups" then
             local new_groups = data.data or {}
-            print(string.format(
-                "[dbg][wl] groups frame: %d groups, cached=%d",
-                #new_groups, state.groups and #state.groups or 0
-            ))
-            for i, g in ipairs(new_groups) do
-                local icon = item_icon_path({ group = g })
-                print(string.format(
-                    "[dbg][wl]   g[%d] key='%s' label='%s' windows=%d icon='%s'",
-                    i, tostring(g.key), tostring(g.label),
-                    g.windows and #g.windows or 0, tostring(icon)
-                ))
-            end
             if not groups_equal(state.groups, new_groups) then
                 state.groups = new_groups
                 state.icons = {}
@@ -265,17 +229,6 @@ M.on_socket_ready = function(state)
                     state.items = items
                     state.hovered_index = nil
                     apply_length(state, items)
-                    print(string.format(
-                        "[dbg][wl] items rebuilt: %d items", #items
-                    ))
-                    for i, it in ipairs(items) do
-                        print(string.format(
-                            "[dbg][wl]   item[%d] key='%s' label='%s' group=%s icon='%s'",
-                            i, tostring(it.key), tostring(it.label),
-                            it.group and "live" or "nil",
-                            tostring(item_icon_path(it))
-                        ))
-                    end
                 end
             end
         end
@@ -345,12 +298,6 @@ M.render = function(state, area, theme)
         if pixels then
             buf:draw_pixels(btn_x, btn_y, ICON_SIZE, ICON_SIZE, pixels)
         else
-            print(string.format(
-                "[dbg][wl] render[%d]: NO PIXELS key='%s' label='%s' group=%s icon='%s' -> draw letter",
-                i, tostring(item.key), tostring(item.label),
-                item.group and "live" or "nil",
-                tostring(item_icon_path(item))
-            ))
             local label = item.label or "?"
             local tw = math.floor(font:text_width(label, theme.font_size))
             local tx = btn_x + math.floor((ICON_SIZE - tw) / 2)
