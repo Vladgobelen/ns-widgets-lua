@@ -1,11 +1,4 @@
 -- Lua-таскбар.
---
--- on_click/on_hover/tooltip/menu_items получают x,y ЛОКАЛЬНЫЕ для виджета.
--- index_at не вычитает area.
---
--- Pinned: в pinned.json храним key|label|cmd|icon_path, чтобы закрытый
--- pinned рисовал иконку. При оживлении pinned (group ~= nil) icon_path
--- обновляется в pinned.json.
 
 local M = {}
 
@@ -17,17 +10,17 @@ local ICON_GAP = 4
 local MIN_LENGTH = 32
 local PIN_FILE = os.getenv("HOME") .. "/.config/nspanel/widgets/window_list_rust/pinned.json"
 
+local function log(fmt, ...)
+    io.stderr:write(string.format("[wl] " .. fmt .. "\n", ...))
+end
+
 local function load_pinned()
     local f = io.open(PIN_FILE, "r")
-    if not f then
-        return {}
-    end
+    if not f then return {} end
     local content = f:read("*a")
     f:close()
     local ok, data = pcall(json.decode, content)
-    if ok and type(data) == "table" then
-        return data
-    end
+    if ok and type(data) == "table" then return data end
     return {}
 end
 
@@ -64,19 +57,16 @@ local function ensure_icon(state, item)
     if state.icons[item.key] ~= nil then
         return state.icons[item.key]
     end
-
     local icon_path = item_icon_path(item)
     if not icon_path then
         state.icons[item.key] = false
         return false
     end
-
     local pixels = img:load(icon_path, ICON_SIZE, "bilinear")
     if pixels then
         state.icons[item.key] = pixels
         return pixels
     end
-
     state.icons[item.key] = false
     return false
 end
@@ -93,9 +83,7 @@ local function groups_equal(a, b)
         end
         local ix = item_icon_path({ group = x })
         local iy = item_icon_path({ group = y })
-        if ix ~= iy then
-            return false
-        end
+        if ix ~= iy then return false end
     end
     return true
 end
@@ -112,11 +100,8 @@ local function build_items(state)
             if g.key == p.key then live_group = g; break end
         end
         table.insert(items, {
-            key = p.key,
-            label = p.label,
-            group = live_group,
-            cmd = p.cmd,
-            icon_path = p.icon_path,
+            key = p.key, label = p.label, group = live_group,
+            cmd = p.cmd, icon_path = p.icon_path,
         })
         seen_keys[p.key] = true
     end
@@ -124,16 +109,12 @@ local function build_items(state)
     for _, g in ipairs(groups) do
         if not seen_keys[g.key] then
             table.insert(items, {
-                key = g.key,
-                label = g.label,
-                group = g,
-                cmd = nil,
-                icon_path = nil,
+                key = g.key, label = g.label, group = g,
+                cmd = nil, icon_path = nil,
             })
             seen_keys[g.key] = true
         end
     end
-
     return items
 end
 
@@ -142,24 +123,16 @@ local function items_equal(a, b)
     if #a ~= #b then return false end
     for i = 1, #a do
         local x, y = a[i], b[i]
-        if x.key ~= y.key or x.label ~= y.label then
-            return false
-        end
-        if (x.group == nil) ~= (y.group == nil) then
-            return false
-        end
+        if x.key ~= y.key or x.label ~= y.label then return false end
+        if (x.group == nil) ~= (y.group == nil) then return false end
         if x.group and y.group then
             if x.group.has_active ~= y.group.has_active
                 or x.group.all_hidden ~= y.group.all_hidden then
                 return false
             end
-            if item_icon_path(x) ~= item_icon_path(y) then
-                return false
-            end
+            if item_icon_path(x) ~= item_icon_path(y) then return false end
         elseif x.group == nil and y.group == nil then
-            if item_icon_path(x) ~= item_icon_path(y) then
-                return false
-            end
+            if item_icon_path(x) ~= item_icon_path(y) then return false end
         end
     end
     return true
@@ -201,19 +174,13 @@ local function refresh_pinned_icons(state)
             end
         end
     end
-    if changed then
-        save_pinned(pinned)
-    end
+    if changed then save_pinned(pinned) end
     return changed
 end
 
 M.on_socket_ready = function(state)
-    if not state.pinned then
-        state.pinned = load_pinned()
-    end
-    if not state.icons then
-        state.icons = {}
-    end
+    if not state.pinned then state.pinned = load_pinned() end
+    if not state.icons then state.icons = {} end
     if not socket then return end
     local frames = socket:read()
     for _, frame in ipairs(frames) do
@@ -249,12 +216,99 @@ local function icon_y(area, vertical, index)
     return area.y + math.floor((area.h - ICON_SIZE) / 2)
 end
 
+local function index_at(state, vertical, x, y)
+    if not state.items then return nil end
+    local n = #state.items
+    if n == 0 then return nil end
+    local index
+    if vertical then
+        index = math.floor(y / (ICON_SIZE + ICON_GAP)) + 1
+    else
+        index = math.floor(x / (ICON_SIZE + ICON_GAP)) + 1
+    end
+    if index > n then index = n end
+    if index < 1 then index = 1 end
+    if state.items[index] then
+        return index
+    end
+    return nil
+end
+
+local function first_visible_window(group)
+    if not group or not group.windows then return nil end
+    for _, w in ipairs(group.windows) do
+        if not w.is_hidden then return w end
+    end
+    return nil
+end
+
+local function first_window(group)
+    if not group or not group.windows then return nil end
+    if #group.windows > 0 then return group.windows[1] end
+    return nil
+end
+
 M.render = function(state, area, theme)
+    M._state = state
+    dnd:update(area)
+
+    if not state._dnd_registered then
+        state._dnd_registered = true
+        dnd:set_on_hover(function(x, y, accepts)
+            local st = M._state
+            if not st then return false end
+            if not accepts then
+                if st.drag_index ~= nil then
+                    st.drag_index = nil
+                    return true
+                end
+                return false
+            end
+            local vertical = st.vertical or false
+            local idx = nil
+            if x >= 0 and y >= 0 then
+                idx = index_at(st, vertical, x, y)
+            end
+            if st.drag_index == idx then return false end
+            st.drag_index = idx
+            if idx then
+                local item = st.items and st.items[idx]
+                if item and item.group then
+                    local win = first_visible_window(item.group)
+                    if win and socket then
+                        local msg = json.encode({ type = "activate", id = win.id })
+                        socket:write(string.pack(">I4", #msg) .. msg)
+                    end
+                end
+            end
+            return true
+        end)
+        dnd:set_on_drop(function(x, y)
+            local st = M._state
+            if not st then return false end
+            st.drag_index = nil
+            local vertical = st.vertical or false
+            if not st.items then return false end
+            local idx = index_at(st, vertical, x, y)
+            if not idx then return false end
+            local item = st.items[idx]
+            if not item or not item.group then return false end
+            local win = first_visible_window(item.group) or first_window(item.group)
+            if not win then return false end
+            local exe = win.exe_path or ""
+            if exe == "" then
+                log("on_drop: exe_path empty for %s", win.class or "?")
+                return false
+            end
+            log("on_drop -> exe=%s", exe)
+            return exe
+        end)
+        log("dnd callbacks registered")
+    end
+
     if not state.pinned then state.pinned = load_pinned() end
     if not state.icons then state.icons = {} end
-    if not state.items then
-        state.items = build_items(state)
-    end
+    if not state.items then state.items = build_items(state) end
 
     local vertical = area.h > area.w
     state.vertical = vertical
@@ -291,6 +345,10 @@ M.render = function(state, area, theme)
             bg = Color.rgb(0x60, 0x60, 0x60)
         end
 
+        if state.drag_index == i then
+            bg = Color.rgb(0x40, 0x80, 0xc0)
+        end
+
         local btn = Rect.new(btn_x, btn_y, ICON_SIZE, ICON_SIZE)
         buf:fill_rect(btn, bg)
 
@@ -307,20 +365,6 @@ M.render = function(state, area, theme)
     end
 end
 
-local function index_at(state, vertical, x, y)
-    if not state.items then return nil end
-    local index
-    if vertical then
-        index = math.floor(y / (ICON_SIZE + ICON_GAP)) + 1
-    else
-        index = math.floor(x / (ICON_SIZE + ICON_GAP)) + 1
-    end
-    if state.items[index] then
-        return index
-    end
-    return nil
-end
-
 M.on_click = function(state, x, y)
     local vertical = state.vertical or false
     if not state.items then return nil end
@@ -330,25 +374,16 @@ M.on_click = function(state, x, y)
     if not item then return nil end
 
     if item.group == nil then
-        if item.cmd and item.cmd ~= "" then
-            os.execute(item.cmd .. " &")
-        end
+        if item.cmd and item.cmd ~= "" then os.execute(item.cmd .. " &") end
         return nil
     end
 
-    local target = nil
-    for _, w in ipairs(item.group.windows or {}) do
-        if not w.is_hidden then target = w; break end
-    end
-    if not target and item.group.windows and #item.group.windows > 0 then
-        target = item.group.windows[1]
-    end
+    local target = first_visible_window(item.group) or first_window(item.group)
     if not target then return nil end
 
     if socket then
         local msg = json.encode({ type = "toggle", id = target.id })
-        local frame = string.pack(">I4", #msg) .. msg
-        socket:write(frame)
+        socket:write(string.pack(">I4", #msg) .. msg)
     end
     return nil
 end
@@ -359,9 +394,7 @@ M.on_hover = function(state, x, y)
     if x >= 0 and y >= 0 then
         new_idx = index_at(state, vertical, x, y)
     end
-    if state.hovered_index == new_idx then
-        return false
-    end
+    if state.hovered_index == new_idx then return false end
     state.hovered_index = new_idx
     return true
 end
@@ -407,9 +440,7 @@ end
 M.menu_items = function(state, x, y)
     if not state.pinned then state.pinned = load_pinned() end
     if not state.icons then state.icons = {} end
-    if not state.items then
-        state.items = build_items(state)
-    end
+    if not state.items then state.items = build_items(state) end
 
     local vertical = state.vertical or false
     local index = index_at(state, vertical, x, y)
@@ -453,22 +484,17 @@ M.on_custom_action = function(state, msg)
         local icon = parts[4]
 
         if not key or key == "" then return false end
-
         local idx, _ = find_pinned(pinned, key)
         if idx then return false end
 
-        table.insert(pinned, {
-            key = key,
-            label = label or "?",
-            cmd = cmd or "",
-            icon_path = icon or "",
-        })
+        table.insert(pinned, { key = key, label = label or "?", cmd = cmd or "", icon_path = icon or "" })
         state.pinned = pinned
         save_pinned(pinned)
 
         local items = build_items(state)
         state.items = items
         apply_length(state, items)
+        log("pinned: %s", key)
         return true
     elseif msg:sub(1, 6) == "unpin:" then
         local key = msg:sub(7)
@@ -482,6 +508,7 @@ M.on_custom_action = function(state, msg)
         local items = build_items(state)
         state.items = items
         apply_length(state, items)
+        log("unpinned: %s", key)
         return true
     end
     return false

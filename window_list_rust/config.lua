@@ -18,5 +18,5 @@ return {
     priority = 10,
     enabled = true,
     tooltip_enabled = true,
-    margin = 1,
+    margin = 0,
 }
